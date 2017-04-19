@@ -19,27 +19,28 @@ namespace Revenj.Http
 		private readonly int TokensCount;
 		public readonly int Groups;
 		private readonly Func<string, int, RouteMatch> ExtractMatcher;
+		internal readonly bool IsStatic;
 
 		public UriPattern(string template)
 		{
-			template = template.TrimEnd('*').ToUpperInvariant();
-			this.Template = template;
-			Tokens = GetTokens(template);
+			this.Template = template.TrimEnd('*').ToUpperInvariant();
+			Tokens = GetTokens(this.Template);
 			TokenMap = new Dictionary<string, int>();
 			for (int i = 0; i < Tokens.Length; i++)
 				TokenMap[Tokens[i]] = i;
 			TokensCount = Tokens.Length;
-			if (TokensCount == 0 && !template.Contains("?") && !template.Contains("{"))
+			IsStatic = !template.EndsWith("*") && TokensCount == 0 && !template.Contains("?") && !template.Contains("{");
+			if (IsStatic)
 				ExtractMatcher = StaticExtractMatch;
 			else
 				ExtractMatcher = DynamicExtractMatch;
-			var segments = BuildRegex(template);
+			var segments = BuildRegex(this.Template);
 			var finalPattern = EscapePattern.Replace(segments, PathGroup);
 			TemplatePattern = new Regex(finalPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
 			Groups = TemplatePattern.GetGroupNumbers().Length;
 		}
 
-		public RouteMatch Match(string url, int offset)
+		public RouteMatch? Match(string url, int offset)
 		{
 			if (!TemplatePattern.IsMatch(url, offset))
 				return null;

@@ -40,30 +40,30 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Microsoft.AspNet.SignalR.Core">
-      <HintPath>..\..\..\Dependencies\SignalR\Microsoft.AspNet.SignalR.Core.dll</HintPath>
+      <HintPath>..\..\Dependencies\SignalR\Microsoft.AspNet.SignalR.Core.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.AspNet.SignalR.Owin">
-      <HintPath>..\..\..\Dependencies\SignalR\Microsoft.AspNet.SignalR.Owin.dll</HintPath>
+      <HintPath>..\..\Dependencies\SignalR\Microsoft.AspNet.SignalR.Owin.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.AspNet.SignalR.SystemWeb">
-      <HintPath>..\..\..\Dependencies\SignalR\Microsoft.AspNet.SignalR.SystemWeb.dll</HintPath>
+      <HintPath>..\..\Dependencies\SignalR\Microsoft.AspNet.SignalR.SystemWeb.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="Microsoft.Owin.Host.SystemWeb">
-      <HintPath>..\..\..\Dependencies\SignalR\Microsoft.Owin.Host.SystemWeb.dll</HintPath>
+      <HintPath>..\..\Dependencies\SignalR\Microsoft.Owin.Host.SystemWeb.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.Web.Infrastructure">
-      <HintPath>..\..\..\..\Dependencies\SignalR\Microsoft.Web.Infrastructure.dll</HintPath>
+      <HintPath>..\..\..\Dependencies\SignalR\Microsoft.Web.Infrastructure.dll</HintPath>
     </Reference>
     <Reference Include="Newtonsoft.Json">
-      <HintPath>..\..\..\..\Dependencies\SignalR\Newtonsoft.Json.dll</HintPath>
+      <HintPath>..\..\..\Dependencies\SignalR\Newtonsoft.Json.dll</HintPath>
       <Package>monodevelop</Package>
     </Reference>
     <Reference Include="Owin">
-      <HintPath>..\..\..\Dependencies\SignalR\Owin.dll</HintPath>
+      <HintPath>..\..\Dependencies\SignalR\Owin.dll</HintPath>
     </Reference>
     <Reference Include="System.Reactive.Core">
-      <HintPath>..\..\..\..\Dependencies\ReactiveExtensions\System.Reactive.Core.dll</HintPath>
+      <HintPath>..\..\..\Dependencies\ReactiveExtensions\System.Reactive.Core.dll</HintPath>
     </Reference>
     <Reference Include="System.Web.DynamicData" />
     <Reference Include="System.Web.Entity" />
@@ -110,9 +110,9 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\Domain\Revenj.DomainPatterns.Interface\Revenj.DomainPatterns.Interface.csproj">
+    <ProjectReference Include="..\..\Core\Revenj.Core.Interface\Revenj.Core.Interface.csproj">
       <Project>{1BC1AA42-67B6-4EFD-B717-2AB6FEB981B8}</Project>
-      <Name>Revenj.DomainPatterns.Interface</Name>
+      <Name>Revenj.Core.Interface</Name>
     </ProjectReference>
     <ProjectReference Include="..\Revenj.Wcf\Revenj.Wcf.csproj">
       <Project>{30CDA3F6-A7A1-499B-B209-118079235744}</Project>

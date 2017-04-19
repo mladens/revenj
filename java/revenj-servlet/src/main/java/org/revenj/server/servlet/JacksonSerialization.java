@@ -8,19 +8,19 @@ import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.revenj.TreePath;
 import org.revenj.serialization.Serialization;
 import org.revenj.patterns.ServiceLocator;
-import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-import org.w3c.dom.ls.DOMImplementationLS;
-import org.w3c.dom.ls.LSOutput;
-import org.w3c.dom.ls.LSSerializer;
 import org.xml.sax.SAXException;
 
 import javax.imageio.ImageIO;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.*;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
 import java.io.*;
 import java.lang.reflect.Type;
 import java.util.HashMap;
@@ -56,17 +56,25 @@ final class JacksonSerialization implements Serialization<String> {
 
 	private static SimpleModule withCustomSerializers() {
 		SimpleModule module = new SimpleModule();
+		TransformerFactory tf = TransformerFactory.newInstance();
+		Transformer transformer;
+		try {
+			transformer = tf.newTransformer();
+			transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
+		} catch (TransformerConfigurationException e) {
+			throw new RuntimeException(e);
+		}
+
 		module.addSerializer(Element.class, new JsonSerializer<Element>() {
 			@Override
 			public void serialize(Element element, JsonGenerator gen, SerializerProvider unused) throws IOException {
-				Document document = element.getOwnerDocument();
-				DOMImplementationLS domImplLS = (DOMImplementationLS) document.getImplementation();
-				LSSerializer serializer = domImplLS.createLSSerializer();
-				LSOutput lsOutput = domImplLS.createLSOutput();
-				lsOutput.setEncoding("UTF-8");
 				StringWriter writer = new StringWriter();
-				lsOutput.setCharacterStream(writer);
-				serializer.write(document, lsOutput);
+				try {
+					transformer.transform(new DOMSource(element.getOwnerDocument()), new StreamResult(writer));
+				} catch (TransformerException e) {
+					throw new IOException(e);
+				}
+				gen.writeString(writer.toString());
 			}
 		});
 		module.addSerializer(java.awt.Point.class, new JsonSerializer<java.awt.Point>() {
@@ -104,6 +112,12 @@ final class JacksonSerialization implements Serialization<String> {
 				final ByteArrayOutputStream baos = new ByteArrayOutputStream();
 				ImageIO.write(image, "png", baos);
 				jg.writeBinary(baos.toByteArray());
+			}
+		});
+		module.addSerializer(TreePath.class, new JsonSerializer<TreePath>() {
+			@Override
+			public void serialize(final TreePath path, final JsonGenerator jg, final SerializerProvider _unused) throws IOException {
+				jg.writeString(path.toString());
 			}
 		});
 		module.addDeserializer(Element.class, new JsonDeserializer<Element>() {
@@ -195,6 +209,12 @@ final class JacksonSerialization implements Serialization<String> {
 				return ImageIO.read(is);
 			}
 		});
+		module.addDeserializer(TreePath.class, new JsonDeserializer<TreePath>() {
+			@Override
+			public TreePath deserialize(final JsonParser parser, final DeserializationContext _unused) throws IOException {
+				return TreePath.create(parser.getValueAsString());
+			}
+		});
 		return module;
 	}
 
@@ -207,8 +227,10 @@ final class JacksonSerialization implements Serialization<String> {
 	}
 
 	@Override
-	public String serialize(Object value) throws IOException {
-		return mapper.writeValueAsString(value);
+	public String serialize(Type type, Object value) throws IOException {
+		if (value == null) return "null";
+		JavaType javaType = mapper.getTypeFactory().constructType(type == null ? value.getClass() : type);
+		return mapper.writerFor(javaType).writeValueAsString(value);
 	}
 
 	public void serialize(Object value, OutputStream stream) throws IOException {

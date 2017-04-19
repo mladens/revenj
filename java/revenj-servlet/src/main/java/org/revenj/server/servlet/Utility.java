@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.nio.charset.Charset;
 import java.security.Principal;
@@ -23,17 +24,43 @@ import java.util.*;
 abstract class Utility {
 	private static final Charset UTF8 = Charset.forName("UTF-8");
 
-	static void executeJson(
+	static void execute(
 			ProcessingEngine engine,
 			HttpServletRequest request,
-			HttpServletResponse ressponse,
-			Class<?> command,
-			Object argument) {
+			HttpServletResponse response,
+			WireSerialization serialization,
+			Class<?> commandType,
+			Object argument) throws IOException {
 		ServerCommandDescription[] scd = new ServerCommandDescription[]{
-				new ServerCommandDescription<>(null, command, argument)
+				new ServerCommandDescription<>(null, commandType, argument)
 		};
-		ProcessingResult<String> result = engine.execute(Object.class, String.class, scd, toPrincipal(request));
-		returnJSON(ressponse, result);
+		ProcessingResult<Object> result = engine.execute(Object.class, Object.class, scd, toPrincipal(request));
+		returnResponse(request, response, serialization, result);
+	}
+
+	static void returnResponse(HttpServletRequest request, HttpServletResponse response, WireSerialization serialization, ProcessingResult<Object> result) throws IOException {
+		if (result.executedCommandResults.length == 1) {
+			CommandResult<Object> command = result.executedCommandResults[0].result;
+			response.setStatus(command.status);
+			response.setHeader("X-Duration", BigDecimal.valueOf(result.duration, 3).toPlainString());
+			if (command.data != null) {
+				response.setContentType(serialization.serialize(command.data, response.getOutputStream(), request.getHeader("accept")));
+			} else if (result.message != null) {
+				try {
+					response.getOutputStream().write(result.message.getBytes(UTF8));
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+		} else if (result.message != null) {
+			response.setStatus(result.status);
+			try {
+				response.setContentType("text/plain; charset=UTF-8");
+				response.getOutputStream().write(result.message.getBytes(UTF8));
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
 	}
 
 	static String readString(InputStream stream, String encoding) throws IOException {
@@ -52,38 +79,11 @@ abstract class Utility {
 		return new String(baos.toByteArray(), encoding != null && encoding.length() > 0 ? encoding : "UTF-8");
 	}
 
-	static void returnJSON(HttpServletResponse response, ProcessingResult<String> result) {
-		if (result.executedCommandResults.length == 1) {
-			CommandResult<String> command = result.executedCommandResults[0].result;
-			response.setStatus(command.status);
-			if (command.data != null) {
-				response.setContentType("application/json");
-				try {
-					response.getOutputStream().write(command.data.getBytes(UTF8));
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-			} else if (result.message != null) {
-				try {
-					response.getOutputStream().write(result.message.getBytes(UTF8));
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-			}
-		} else if (result.message != null) {
-			response.setStatus(result.status);
-			try {
-				response.getOutputStream().write(result.message.getBytes(UTF8));
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
-	}
-
 	public static Principal toPrincipal(HttpServletRequest req) {
-		return req.getUserPrincipal() != null && !(req.getUserPrincipal() instanceof UserPrincipal)
-				? new UserPrincipal(req.getUserPrincipal().getName(), req::isUserInRole)
-				: req.getUserPrincipal();
+		Principal principal = req.getUserPrincipal();
+		return principal != null && !(principal instanceof UserPrincipal)
+				? new UserPrincipal(principal.getName(), req::isUserInRole)
+				: principal;
 	}
 
 	static Optional<String> findName(DomainModel model, String path, String prefix, HttpServletResponse res) throws IOException {
@@ -154,6 +154,33 @@ abstract class Utility {
 		return Utility.objectFromQuery(specManifest.get(), req, res);
 	}
 
+	static <T> Optional<T> deserializeOrBadRequest(
+			WireSerialization serialization,
+			Class<T> manifest,
+			HttpServletRequest req,
+			HttpServletResponse res) throws IOException {
+		try {
+			return Optional.of(serialization.deserialize(req.getInputStream(), req.getContentType(), manifest));
+		} catch (IOException e) {
+			res.sendError(400, "Error deserializing input: " + e.getMessage());
+			return Optional.empty();
+		}
+	}
+
+	static <T> Optional<T> deserializeOrBadRequest(
+			WireSerialization serialization,
+			HttpServletRequest req,
+			HttpServletResponse res,
+			Class<T> container,
+	        Type manifest) throws IOException {
+		try {
+			return Optional.of(serialization.deserialize(req.getInputStream(), req.getContentType(), container, manifest));
+		} catch (IOException e) {
+			res.sendError(400, "Error deserializing input: " + e.getMessage());
+			return Optional.empty();
+		}
+	}
+
 	static Optional<Object> specificationFromStream(
 			WireSerialization serialization,
 			String parent,
@@ -176,6 +203,14 @@ abstract class Utility {
 			res.sendError(400, "Error deserializing specification: " + e.getMessage());
 			return Optional.empty();
 		}
+	}
+
+	static Boolean returnInstance(HttpServletRequest request) throws IOException {
+		String result = request.getParameter("result");
+		if (result == null) {
+			result = request.getHeader("x-revenj-result");
+		}
+		return "instance".equals(result) ? Boolean.TRUE : "uri".equals(result) ? Boolean.FALSE : null;
 	}
 
 	public static List<Map.Entry<String, Boolean>> parseOrder(String order) {

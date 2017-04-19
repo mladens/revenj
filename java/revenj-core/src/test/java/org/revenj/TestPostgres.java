@@ -2,9 +2,9 @@ package org.revenj;
 
 import org.junit.Assert;
 import org.junit.Test;
-import org.revenj.postgres.PostgresReader;
-import org.revenj.postgres.PostgresWriter;
-import org.revenj.postgres.converters.*;
+import org.revenj.database.postgres.PostgresReader;
+import org.revenj.database.postgres.PostgresWriter;
+import org.revenj.database.postgres.converters.*;
 
 import java.io.IOException;
 import java.time.OffsetDateTime;
@@ -65,7 +65,7 @@ public class TestPostgres {
 	@Test
 	public void zoneRange() throws IOException {
 		PostgresReader reader = new PostgresReader();
-		reader.process("[NULL,\"2015-09-28 13:35:42.973+02:00\",\"1970-01-01 01:00:00+01:00\",\"0001-01-01 00:00:00Z\",\"2038-02-13 00:45:30.647+01:00\"]");
+		reader.process("{NULL,\"2015-09-28 13:35:42.973+02:00\",\"1970-01-01 01:00:00+01:00\",\"0001-01-01 00:00:00Z\",\"2038-02-13 00:45:30.647+01:00\"}");
 		List<OffsetDateTime> values = TimestampConverter.parseOffsetCollection(reader, 0, true, true);
 		Assert.assertEquals(5, values.size());
 		Assert.assertNull(values.get(0));
@@ -74,12 +74,12 @@ public class TestPostgres {
 	@Test
 	public void timestampWithTimeOffset() throws IOException {
 		PostgresReader reader = new PostgresReader();
-		reader.process("[\"0001-01-01 00:00:00+01:22\"]");
+		reader.process("{\"0001-01-01 00:00:00+01:22\"}");
 		List<OffsetDateTime> values = TimestampConverter.parseOffsetCollection(reader, 0, true, false);
 		Assert.assertEquals(1, values.size());
 		Assert.assertEquals(4920, values.get(0).getOffset().getTotalSeconds());
 		Assert.assertEquals(0, values.get(0).getMinute());
-		reader.process("[\"0001-01-01 00:00:00+01:22\"]");
+		reader.process("{\"0001-01-01 00:00:00+01:22\"}");
 		values = TimestampConverter.parseOffsetCollection(reader, 0, true, true);
 		Assert.assertEquals(1, values.size());
 		Assert.assertEquals(0, values.get(0).getOffset().getTotalSeconds());
@@ -102,5 +102,55 @@ public class TestPostgres {
 		TimestampConverter.serializeURI(writer, zero);
 		String value = writer.bufferToString();
 		Assert.assertEquals("2000-12-31 23:38:00+01", value);
+	}
+
+	@Test
+	public void checkUriParsing() throws IOException {
+		String[] arr = new String[2];
+		PostgresReader.parseCompositeURI("1234/", arr);
+		Assert.assertEquals("1234", arr[0]);
+		Assert.assertEquals("", arr[1]);
+		PostgresReader.parseCompositeURI("123/3456", arr);
+		Assert.assertEquals("123", arr[0]);
+		Assert.assertEquals("3456", arr[1]);
+		PostgresReader.parseCompositeURI("\\\\123\\/34/56", arr);
+		Assert.assertEquals("\\123/34", arr[0]);
+		Assert.assertEquals("56", arr[1]);
+		try {
+			PostgresReader.parseCompositeURI("123/34/56", arr);
+			Assert.fail("Exception expected");
+		}catch (IOException ex) {
+			Assert.assertTrue(ex.getMessage().contains("Number of expected parts: 2"));
+		}
+	}
+
+	@Test
+	public void compositeUriCheck() throws IOException {
+		StringBuilder sb = new StringBuilder();
+		PostgresWriter.writeCompositeUri(sb, "ab\\\\cd/de''fg");
+		Assert.assertEquals("('ab\\cd','de''''fg')", sb.toString());
+	}
+
+	@Test
+	public void longIssue() throws IOException {
+		PostgresReader reader = new PostgresReader();
+		List<Long> longs = Arrays.asList(0L, 1L, -1L, Long.MAX_VALUE, Long.MIN_VALUE, Long.MAX_VALUE - 1, Long.MIN_VALUE + 1);
+		PostgresTuple tuple = ArrayTuple.create(longs, LongConverter::toTuple);
+		String value = tuple.buildTuple(false);
+		reader.process(value);
+		List<Long> result = LongConverter.parseCollection(reader, 0, false);
+		Assert.assertEquals(longs, result);
+	}
+
+	@Test
+	public void invalidUrl() throws IOException {
+		try {
+			Properties p = new Properties();
+			p.setProperty("revenj.jdbcUrl", "jdbc:logging:postgres://localhost/db");
+			Revenj.dataSource(p);
+			Assert.fail("Expecting IOException");
+		} catch (IOException ex) {
+			Assert.assertTrue(ex.getMessage().contains("Invalid revenj.jdbcUrl provided. Expecting: 'jdbc:postgresql"));
+		}
 	}
 }

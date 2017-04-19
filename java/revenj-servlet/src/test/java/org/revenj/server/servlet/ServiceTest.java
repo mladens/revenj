@@ -11,8 +11,8 @@ import org.revenj.security.PermissionManager;
 import org.revenj.serialization.Serialization;
 import org.revenj.serialization.WireSerialization;
 import org.revenj.server.ProcessingEngine;
-import org.revenj.server.ServerCommand;
 import org.revenj.server.ServerService;
+import org.revenj.server.TestProcessingEngine;
 import org.revenj.server.commands.ExecuteService;
 
 import javax.servlet.*;
@@ -97,22 +97,37 @@ public class ServiceTest extends Mockito {
 		private final JacksonSerialization jackson = new JacksonSerialization(null, Optional.empty());
 
 		@Override
-		public void serialize(Object value, OutputStream stream, String contentType) throws IOException {
+		public String serialize(Object value, OutputStream stream, String accept) throws IOException {
 			jackson.serialize(value, stream);
+			return "application/json";
 		}
 
 		@Override
-		public Object deserialize(Type type, byte[] content, int length, String accept) throws IOException {
+		public Object deserialize(Type type, byte[] content, int length, String contentType) throws IOException {
 			return jackson.deserialize(type, content, length);
 		}
 
 		@Override
-		public Object deserialize(Type type, InputStream stream, String accept) throws IOException {
+		public Object deserialize(Type type, InputStream stream, String contentType) throws IOException {
 			return jackson.deserialize(type, stream);
+		}
+
+		static class PassThroughSerialization implements Serialization<Object> {
+
+			@Override
+			public Object serialize(Type type, Object value) {
+				return value;
+			}
+
+			@Override
+			public Object deserialize(Type type, Object data) throws IOException {
+				return data;
+			}
 		}
 
 		@Override
 		public <TFormat> Optional<Serialization<TFormat>> find(Class<TFormat> format) {
+			if (format == Object.class) return Optional.of((Serialization) new PassThroughSerialization());
 			return Optional.of((Serialization) jackson);
 		}
 	}
@@ -125,17 +140,17 @@ public class ServiceTest extends Mockito {
 		}
 
 		@Override
-		public <T extends org.revenj.patterns.DataSource, S extends T> Query<S> applyFilters(Class<T> manifest, Principal user, Query<S> data) {
+		public <T, S extends T> Query<S> applyFilters(Class<T> manifest, Principal user, Query<S> data) {
 			return data;
 		}
 
 		@Override
-		public <T extends org.revenj.patterns.DataSource, S extends T> List<S> applyFilters(Class<T> manifest, Principal user, List<S> data) {
+		public <T, S extends T> List<S> applyFilters(Class<T> manifest, Principal user, List<S> data) {
 			return data;
 		}
 
 		@Override
-		public <T extends org.revenj.patterns.DataSource> Closeable registerFilter(Class<T> manifest, Specification<T> filter, String role, boolean inverse) {
+		public <T> Closeable registerFilter(Class<T> manifest, Specification<T> filter, String role, boolean inverse) {
 			return null;
 		}
 	}
@@ -159,15 +174,14 @@ public class ServiceTest extends Mockito {
 		when(dataSource.getConnection()).thenReturn(connection);
 		when(response.getOutputStream()).thenReturn(outputStream);
 		when(container.createScope()).thenReturn(container);
-		when(container.resolve((Type)MyService.class)).thenReturn(new MyService());
+		when(container.resolve((Type) MyService.class)).thenReturn(new MyService());
 
-		ProcessingEngine engine =
-				new ProcessingEngine(
-						container,
-						dataSource,
-						serialization,
-						permissions,
-						new ServerCommand[]{new ExecuteService(Thread.currentThread().getContextClassLoader(), permissions)});
+		ProcessingEngine engine = TestProcessingEngine.create(
+			container,
+			dataSource,
+			serialization,
+			permissions,
+			new ExecuteService(Thread.currentThread().getContextClassLoader(), permissions));
 		StandardServlet servlet = new StandardServlet(model, engine, serialization);
 		servlet.doPost(request, response);
 

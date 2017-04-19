@@ -4,12 +4,12 @@ import com.dslplatform.json.DslJson;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.revenj.Revenj;
 import org.revenj.extensibility.Container;
-import org.revenj.json.DslJsonSerialization;
+import org.revenj.serialization.json.DslJsonSerialization;
 import org.revenj.patterns.DataChangeNotification;
 import org.revenj.patterns.DataContext;
 import org.revenj.patterns.ServiceLocator;
-import org.revenj.postgres.QueryProvider;
-import org.revenj.postgres.jinq.transform.MetamodelUtil;
+import org.revenj.database.postgres.QueryProvider;
+import org.revenj.database.postgres.jinq.transform.MetamodelUtil;
 import org.revenj.security.PermissionManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
@@ -21,6 +21,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 import javax.sql.DataSource;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Type;
 import java.util.Optional;
@@ -96,6 +97,11 @@ public class RevenjStartup {
 			@Override
 			public Object deserialize(ServiceLocator serviceLocator, Type type, byte[] bytes, int len) throws IOException {
 				return mapper.readValue(bytes, 0, len, mapper.getTypeFactory().constructType(type));
+			}
+
+			@Override
+			public Object deserialize(ServiceLocator serviceLocator, Type type, InputStream stream) throws IOException {
+				return mapper.readValue(stream, mapper.getTypeFactory().constructType(type));
 			}
 		});
 	}

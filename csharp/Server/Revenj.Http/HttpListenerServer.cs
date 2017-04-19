@@ -33,7 +33,7 @@ namespace Revenj.Http
 			}
 			if (Listener.Prefixes.Count == 0)
 				Listener.Prefixes.Add("http://*:8999/");
-			Routes = new Routes(locator);
+			Routes = locator.Resolve<Routes>();
 			var customAuth = ConfigurationManager.AppSettings["CustomAuth"];
 			if (!string.IsNullOrEmpty(customAuth))
 			{
@@ -98,6 +98,9 @@ namespace Revenj.Http
 			}
 		}
 
+		private readonly ThreadLocal<ChunkedMemoryStream> LocalStream =
+			new ThreadLocal<ChunkedMemoryStream>(() => ChunkedMemoryStream.Static());
+
 		private void ProcessMessageThread(object state)
 		{
 			var context = (HttpListenerContext)state;
@@ -105,10 +108,11 @@ namespace Revenj.Http
 			var response = context.Response;
 			try
 			{
-				RouteMatch match;
-				var route = Routes.Find(request.HttpMethod, request.RawUrl, request.Url.AbsolutePath, out match);
-				if (route != null)
+				RouteHandler route;
+				var routeMatch = Routes.Find(request.HttpMethod, request.RawUrl, request.Url.AbsolutePath, out route);
+				if (routeMatch != null)
 				{
+					var match = routeMatch.Value;
 					var auth = Authentication.TryAuthorize(context.Request.Headers["Authorization"], context.Request.RawUrl, route);
 					if (auth.Principal != null)
 					{
@@ -116,7 +120,7 @@ namespace Revenj.Http
 						ThreadContext.Request = ctx;
 						ThreadContext.Response = ctx;
 						Thread.CurrentPrincipal = auth.Principal;
-						using (var stream = route.Handle(match.OrderedArgs, context.Request.InputStream))
+						using (var stream = route.Handle(match.OrderedArgs, ctx, ctx, context.Request.InputStream, LocalStream.Value))
 						{
 							var cms = stream as ChunkedMemoryStream;
 							if (cms != null)
@@ -160,7 +164,6 @@ namespace Revenj.Http
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine(ex.Message);
 				TraceSource.TraceEvent(TraceEventType.Error, 5403, "{0}", ex);
 				ReturnError(response, 500, ex.Message);
 			}
@@ -184,7 +187,6 @@ namespace Revenj.Http
 			}
 			catch (Exception ex)
 			{
-				Console.WriteLine(ex.Message);
 				TraceSource.TraceEvent(TraceEventType.Error, 5404, "{0}", ex);
 			}
 		}

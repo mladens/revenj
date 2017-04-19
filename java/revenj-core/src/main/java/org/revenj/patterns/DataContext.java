@@ -55,22 +55,22 @@ public interface DataContext {
 		create(Collections.singletonList(aggregate));
 	}
 
-	<T extends AggregateRoot> void update(Collection<Map.Entry<T, T>> pairs) throws IOException;
+	<T extends AggregateRoot> void updatePairs(Collection<Map.Entry<T, T>> pairs) throws IOException;
 
 	default <T extends AggregateRoot> void update(T oldAggregate, T newAggregate) throws IOException {
-		update(Collections.singletonList(new HashMap.SimpleEntry<>(oldAggregate, newAggregate)));
+		updatePairs(Collections.singletonList(new HashMap.SimpleEntry<>(oldAggregate, newAggregate)));
 	}
 
 	default <T extends AggregateRoot> void update(T aggregate) throws IOException {
-		update(Collections.singletonList(new HashMap.SimpleEntry<>(null, aggregate)));
+		updatePairs(Collections.singletonList(new HashMap.SimpleEntry<>(null, aggregate)));
 	}
 
-	default <T extends AggregateRoot> void update(List<T> aggregates) throws IOException {
+	default <T extends AggregateRoot> void update(Collection<T> aggregates) throws IOException {
 		Collection<Map.Entry<T, T>> collection = new ArrayList<>(aggregates.size());
 		for (T item : aggregates) {
 			collection.add(new AbstractMap.SimpleEntry<>(null, item));
 		}
-		update(collection);
+		updatePairs(collection);
 	}
 
 	<T extends AggregateRoot> void delete(Collection<T> aggregates) throws IOException;
@@ -85,7 +85,24 @@ public interface DataContext {
 		submit(Collections.singletonList(event));
 	}
 
+	<T extends DomainEvent> void queue(Collection<T> events);
+
+	default <T extends DomainEvent> void queue(T event) {
+		queue(Collections.singletonList(event));
+	}
+
 	<T> T populate(Report<T> report);
 
 	<T extends Identifiable> Observable<DataChangeNotification.TrackInfo<T>> track(Class<T> manifest);
+
+	<T extends ObjectHistory> List<History<T>> history(Class<T> manifest, Collection<String> uris);
+
+	default <T extends ObjectHistory> Optional<History<T>> history(Class<T> manifest, String uri) {
+		List<History<T>> found = history(manifest, Collections.singletonList(uri));
+		return found.size() == 1 ? Optional.of(found.get(0)) : Optional.<History<T>>empty();
+	}
+
+	default <T extends ObjectHistory> List<History<T>> history(Class<T> manifest, String[] uris) {
+		return history(manifest, Arrays.asList(uris));
+	}
 }

@@ -2,11 +2,8 @@ package org.revenj.server.servlet;
 
 import org.revenj.patterns.*;
 import org.revenj.server.ProcessingEngine;
-import org.revenj.server.commands.CountDomainObject;
-import org.revenj.server.commands.GetDomainObject;
-import org.revenj.server.commands.search.SearchDomainObject;
-import org.revenj.server.commands.DomainObjectExists;
-import org.revenj.server.commands.SubmitEvent;
+import org.revenj.server.commands.*;
+import org.revenj.server.commands.search.*;
 import org.revenj.serialization.WireSerialization;
 
 import javax.servlet.ServletException;
@@ -47,10 +44,17 @@ public class DomainServlet extends HttpServlet {
 					return;
 				}
 				List<Map.Entry<String, Boolean>> order = Utility.parseOrder(req.getParameter("order"));
-				Integer limit = req.getParameter("limit") != null ? Integer.parseInt(req.getParameter("limit")) : null;
-				Integer offset = req.getParameter("offset") != null ? Integer.parseInt(req.getParameter("offset")) : null;
+				Integer limit;
+				Integer offset;
+				try {
+					limit = req.getParameter("limit") != null ? Integer.parseInt(req.getParameter("limit")) : null;
+					offset = req.getParameter("offset") != null ? Integer.parseInt(req.getParameter("offset")) : null;
+				} catch (NumberFormatException nfe) {
+					res.sendError(400, "Invalid limit/offset provided: " + nfe.getMessage());
+					return;
+				}
 				SearchDomainObject.Argument arg = new SearchDomainObject.Argument<>(name.get(), spec, specification.orElse(null), offset, limit, order);
-				Utility.executeJson(engine, req, res, SearchDomainObject.class, arg);
+				Utility.execute(engine, req, res, serialization, SearchDomainObject.class, arg);
 			}
 		} else if (path.startsWith("/count/")) {
 			Optional<String> name = Utility.findName(model, path, "/count/", res);
@@ -61,7 +65,7 @@ public class DomainServlet extends HttpServlet {
 					return;
 				}
 				CountDomainObject.Argument arg = new CountDomainObject.Argument<>(name.get(), spec, specification.orElse(null));
-				Utility.executeJson(engine, req, res, CountDomainObject.class, arg);
+				Utility.execute(engine, req, res, serialization, CountDomainObject.class, arg);
 			}
 		} else if (path.startsWith("/exists/")) {
 			Optional<String> name = Utility.findName(model, path, "/exists/", res);
@@ -72,7 +76,18 @@ public class DomainServlet extends HttpServlet {
 					return;
 				}
 				DomainObjectExists.Argument arg = new DomainObjectExists.Argument<>(name.get(), spec, specification.orElse(null));
-				Utility.executeJson(engine, req, res, DomainObjectExists.class, arg);
+				Utility.execute(engine, req, res, serialization, DomainObjectExists.class, arg);
+			}
+		} else if (path.startsWith("/check/")) {
+			Optional<String> name = Utility.findName(model, path, "/check/", res);
+			if (name.isPresent()) {
+				String uri = req.getParameter("uri");
+				if (uri == null) {
+					res.sendError(400, "Uri parameter not set. Expecting /module.name?uri=value");
+					return;
+				}
+				CheckDomainObject.Argument arg = new CheckDomainObject.Argument(name.get(), uri);
+				Utility.execute(engine, req, res, serialization, CheckDomainObject.class, arg);
 			}
 		} else {
 			res.sendError(405, "Unknown URL path: " + path);
@@ -89,9 +104,21 @@ public class DomainServlet extends HttpServlet {
 				res.sendError(400, "Unknown domain object: " + name);
 				return;
 			}
-			Object domainEvent = serialization.deserialize(manifest.get(), req.getInputStream(), req.getContentType());
-			SubmitEvent.Argument arg = new SubmitEvent.Argument<>(name, domainEvent, "instance".equals(req.getParameter("result")));
-			Utility.executeJson(engine, req, res, SubmitEvent.class, arg);
+			Optional<?> domainEvent = Utility.deserializeOrBadRequest(serialization, manifest.get(), req, res);
+			if (!domainEvent.isPresent()) return;
+			SubmitEvent.Argument arg = new SubmitEvent.Argument<>(name, domainEvent.get(), Utility.returnInstance(req));
+			Utility.execute(engine, req, res, serialization, SubmitEvent.class, arg);
+		} else if (path.startsWith("/queue/")) {
+			String name = path.substring("/queue/".length(), path.length());
+			Optional<Class<?>> manifest = model.find(name);
+			if (!manifest.isPresent()) {
+				res.sendError(400, "Unknown domain object: " + name);
+				return;
+			}
+			Optional<?> domainEvent = Utility.deserializeOrBadRequest(serialization, manifest.get(), req, res);
+			if (!domainEvent.isPresent()) return;
+			QueueEvent.Argument arg = new QueueEvent.Argument<>(name, domainEvent.get());
+			Utility.execute(engine, req, res, serialization, QueueEvent.class, arg);
 		} else if (path.startsWith("/find/")) {
 			findWithArguments(req, res, path);
 		} else if (path.startsWith("/search/")) {
@@ -150,8 +177,15 @@ public class DomainServlet extends HttpServlet {
 		final Optional<String> name = Utility.findName(model, path, "/search/", res);
 		if (name.isPresent()) {
 			List<Map.Entry<String, Boolean>> order = Utility.parseOrder(req.getParameter("order"));
-			Integer limit = req.getParameter("limit") != null ? Integer.parseInt(req.getParameter("limit")) : null;
-			Integer offset = req.getParameter("offset") != null ? Integer.parseInt(req.getParameter("offset")) : null;
+			Integer limit;
+			Integer offset;
+			try {
+				limit = req.getParameter("limit") != null ? Integer.parseInt(req.getParameter("limit")) : null;
+				offset = req.getParameter("offset") != null ? Integer.parseInt(req.getParameter("offset")) : null;
+			} catch (NumberFormatException nfe) {
+				res.sendError(400, "Invalid limit/offset provided: " + nfe.getMessage());
+				return;
+			}
 			executeWithSpecification(
 					SearchDomainObject.class,
 					req,
@@ -162,11 +196,13 @@ public class DomainServlet extends HttpServlet {
 	}
 
 	private void findWithArguments(HttpServletRequest req, HttpServletResponse res, String path) throws IOException {
-		String[] uris = serialization.deserialize(req.getInputStream(), req.getContentType(), String[].class);
-		Utility.findName(model, path, "/find/", res).ifPresent(name -> {
-			GetDomainObject.Argument arg = new GetDomainObject.Argument(name, uris, "match".equals(req.getParameter("order")));
-			Utility.executeJson(engine, req, res, GetDomainObject.class, arg);
-		});
+		Optional<String> name = Utility.findName(model, path, "/find/", res);
+		if (name.isPresent()) {
+			Optional<String[]> uris = Utility.deserializeOrBadRequest(serialization, String[].class, req, res);
+			if (!uris.isPresent()) return;
+			GetDomainObject.Argument arg = new GetDomainObject.Argument(name.get(), uris.get(), "match".equals(req.getParameter("order")));
+			Utility.execute(engine, req, res, serialization, GetDomainObject.class, arg);
+		}
 	}
 
 	private void executeWithSpecification(
@@ -196,6 +232,6 @@ public class DomainServlet extends HttpServlet {
 		} else {
 			arg = buildArgument.apply(null);
 		}
-		Utility.executeJson(engine, req, res, target, arg);
+		Utility.execute(engine, req, res, serialization, target, arg);
 	}
 }

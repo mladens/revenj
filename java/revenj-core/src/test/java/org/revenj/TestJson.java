@@ -4,7 +4,7 @@ import com.dslplatform.json.JsonReader;
 import com.dslplatform.json.JsonWriter;
 import org.junit.Assert;
 import org.junit.Test;
-import org.revenj.json.DslJsonSerialization;
+import org.revenj.serialization.json.DslJsonSerialization;
 import com.dslplatform.json.JavaTimeConverter;
 
 import java.io.ByteArrayInputStream;
@@ -65,7 +65,7 @@ public class TestJson {
 		Assert.assertEquals('4', result[0]);
 		Assert.assertEquals('2', result[1]);
 		ByteArrayInputStream is = new ByteArrayInputStream(result);
-		int value = (int)json.deserialize(new byte[512], int.class, is);
+		int value = json.deserialize(int.class, is, new byte[512]);
 		Assert.assertEquals(42, value);
 	}
 
@@ -82,7 +82,7 @@ public class TestJson {
 		}
 		Assert.assertEquals('"', result[513]);
 		ByteArrayInputStream is = new ByteArrayInputStream(result);
-		String value = (String)json.deserialize(new byte[512], String.class, is);
+		String value = json.deserialize(String.class, is, new byte[512]);
 		Assert.assertEquals(new String(new char[512]).replace('\0', 'x'), value);
 	}
 
@@ -132,5 +132,14 @@ public class TestJson {
 		java.sql.Timestamp deserialized = json.deserialize(serialized, java.sql.Timestamp.class);
 		Assert.assertEquals(deserialized, ts);
 		Assert.assertEquals(deserialized.toInstant(), odt.toInstant());
+	}
+
+	@Test
+	public void treePathConversion() throws IOException {
+		DslJsonSerialization json = new DslJsonSerialization(null, Optional.empty());
+		TreePath tp = TreePath.create("abc.def");
+		String serialized = json.serialize(tp);
+		TreePath deserialized = json.deserialize(serialized, TreePath.class);
+		Assert.assertEquals(deserialized, tp);
 	}
 }

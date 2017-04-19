@@ -63,13 +63,13 @@
     <Reference Include="System.Core" />
     <Reference Include="System.Data" />
     <Reference Include="System.Reactive.Core">
-      <HintPath>..\..\..\Dependencies\ReactiveExtensions\System.Reactive.Core.dll</HintPath>
+      <HintPath>..\..\Dependencies\ReactiveExtensions\System.Reactive.Core.dll</HintPath>
     </Reference>
     <Reference Include="System.Reactive.Interfaces">
-      <HintPath>..\..\..\Dependencies\ReactiveExtensions\System.Reactive.Interfaces.dll</HintPath>
+      <HintPath>..\..\Dependencies\ReactiveExtensions\System.Reactive.Interfaces.dll</HintPath>
     </Reference>
     <Reference Include="System.Reactive.Linq">
-      <HintPath>..\..\..\Dependencies\ReactiveExtensions\System.Reactive.Linq.dll</HintPath>
+      <HintPath>..\..\Dependencies\ReactiveExtensions\System.Reactive.Linq.dll</HintPath>
     </Reference>
     <Reference Include="System.ServiceProcess" />
     <Reference Include="System.Web.Extensions" />
@@ -95,9 +95,13 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\Core\Revenj.Extensibility.Interface\Revenj.Extensibility.Interface.csproj">
-      <Project>{E7DE330D-1E7C-486E-BAE6-222B87256408}</Project>
-      <Name>Revenj.Extensibility.Interface</Name>
+    <ProjectReference Include="..\..\Core\Revenj.Core.Interface\Revenj.Core.Interface.csproj">
+      <Project>{1BC1AA42-67B6-4EFD-B717-2AB6FEB981B8}</Project>
+      <Name>Revenj.Core.Interface</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\..\Core\Revenj.Core\Revenj.Core.csproj">
+      <Project>{A01BD986-6602-44CF-B27B-1370E9BF7CF8}</Project>
+      <Name>Revenj.Core</Name>
     </ProjectReference>
     <ProjectReference Include="..\Revenj.Wcf\Revenj.Wcf.csproj">
       <Project>{30CDA3F6-A7A1-499B-B209-118079235744}</Project>
@@ -146,7 +150,7 @@
   <PropertyGroup>
     <PostBuildEvent>copy ..\..\..\..\Features\Revenj.Features.Mailer\bin\$(ConfigurationName)\Revenj.Features.Mailer.dll .
 copy ..\..\..\..\Plugins\Revenj.Plugins.DatabasePersistence.Postgres\bin\$(ConfigurationName)\Revenj.Plugins.DatabasePersistence.Postgres.dll .
-copy ..\..\..\..\..\Dependencies\Templater\NGS.Templater.dll .
+copy ..\..\..\..\Dependencies\Templater\NGS.Templater.dll .
 </PostBuildEvent>
   </PropertyGroup>
   <PropertyGroup>

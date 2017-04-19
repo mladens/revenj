@@ -4,46 +4,73 @@ using System.Configuration;
 using System.Linq;
 using System.ServiceModel.Web;
 using System.Xml.Linq;
+using Revenj.Serialization;
+using Revenj.Utility;
 
 namespace Revenj.Http
 {
 	internal class Routes
 	{
 		private readonly Dictionary<string, Dictionary<string, List<RouteHandler>>> MethodRoutes = new Dictionary<string, Dictionary<string, List<RouteHandler>>>();
-		private Dictionary<ReqId, RouteHandler> Cache = new Dictionary<ReqId, RouteHandler>();
+		private Dictionary<int, RouteHandler> Cache = new Dictionary<int, RouteHandler>();
 
-		public Routes(IServiceProvider locator)
+		public Routes(IServiceProvider locator, IWireSerialization serialization)
 		{
+			var totalControllers = 0;
+			foreach (var t in AssemblyScanner.GetAllTypes())
+			{
+				if (t.IsClass && !t.IsAbstract && (t.IsPublic || t.IsNestedPublic))
+				{
+					var attr = t.GetCustomAttributes(typeof(ControllerAttribute), false) as ControllerAttribute[];
+					if (attr != null && attr.Length > 0)
+					{
+						totalControllers++;
+						foreach (var a in attr)
+							ConfigureService(locator, serialization, a.RootUrl, t);
+					}
+				}
+			}
 			var config = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None);
 			var xml = XElement.Load(config.FilePath, LoadOptions.None);
 			var sm = xml.Element("system.serviceModel");
 			if (sm == null)
+			{
+				if (totalControllers > 0) return;
 				throw new ConfigurationErrorsException("Services not defined. system.serviceModel missing from configuration");
+			}
 			var she = sm.Element("serviceHostingEnvironment");
 			if (she == null)
+			{
+				if (totalControllers > 0) return;
 				throw new ConfigurationErrorsException("Services not defined. serviceHostingEnvironment missing from configuration");
+			}
 			var sa = she.Element("serviceActivations");
 			if (sa == null)
+			{
+				if (totalControllers > 0) return;
 				throw new ConfigurationErrorsException("Services not defined. serviceActivations missing from configuration");
+			}
 			var services = sa.Elements("add").ToList();
-			if (services.Count == 0)
-				throw new ConfigurationErrorsException("Services not defined. serviceActivations elements not defined in configuration");
+			if (services.Count == 0 && totalControllers == 0)
+				throw new ConfigurationErrorsException("Services not defined and controllers not found on path. serviceActivations elements not defined in configuration");
 			foreach (XElement s in services)
-				ConfigureService(s, locator);
+			{
+				var attributes = s.Attributes().ToList();
+				var ra = attributes.FirstOrDefault(it => "relativeAddress".Equals(it.Name.LocalName, StringComparison.InvariantCultureIgnoreCase));
+				var serv = attributes.FirstOrDefault(it => "service".Equals(it.Name.LocalName, StringComparison.InvariantCultureIgnoreCase));
+				if (serv == null || string.IsNullOrEmpty(serv.Value))
+					throw new ConfigurationErrorsException("Missing service type on serviceActivation element: " + s.ToString());
+				if (ra == null || string.IsNullOrEmpty(ra.Value))
+					throw new ConfigurationErrorsException("Missing relative address on serviceActivation element: " + s.ToString());
+				var type = Type.GetType(serv.Value);
+				if (type == null)
+					throw new ConfigurationErrorsException("Invalid service defined in " + ra.Value + ". Type " + serv.Value + " not found.");
+				ConfigureService(locator, serialization, ra.Value, type);
+			}
 		}
 
-		private void ConfigureService(XElement service, IServiceProvider locator)
+		private void ConfigureService(IServiceProvider locator, IWireSerialization serialization, string name, Type type)
 		{
-			var attributes = service.Attributes().ToList();
-			var ra = attributes.FirstOrDefault(it => "relativeAddress".Equals(it.Name.LocalName, StringComparison.InvariantCultureIgnoreCase));
-			var serv = attributes.FirstOrDefault(it => "service".Equals(it.Name.LocalName, StringComparison.InvariantCultureIgnoreCase));
-			if (serv == null || string.IsNullOrEmpty(serv.Value))
-				throw new ConfigurationErrorsException("Missing service type on serviceActivation element: " + service.ToString());
-			if (ra == null || string.IsNullOrEmpty(ra.Value))
-				throw new ConfigurationErrorsException("Missing relative address on serviceActivation element: " + service.ToString());
-			var type = Type.GetType(serv.Value);
-			if (type == null)
-				throw new ConfigurationErrorsException("Invalid service defined in " + ra.Value + ". Type " + serv.Value + " not found.");
 			var instance = locator.GetService(type);
 			foreach (var i in new[] { type }.Union(type.GetInterfaces()))
 			{
@@ -51,15 +78,21 @@ namespace Revenj.Http
 				{
 					var inv = (WebInvokeAttribute[])m.GetCustomAttributes(typeof(WebInvokeAttribute), false);
 					var get = (WebGetAttribute[])m.GetCustomAttributes(typeof(WebGetAttribute), false);
+					var route = (RouteAttribute[])m.GetCustomAttributes(typeof(RouteAttribute), false);
 					foreach (var at in inv)
 					{
-						var rh = new RouteHandler(ra.Value, at.UriTemplate, instance, m);
+						var rh = new RouteHandler(name, at.UriTemplate, instance, true, m, locator, serialization);
 						Add(at.Method, rh);
 					}
 					foreach (var at in get)
 					{
-						var rh = new RouteHandler(ra.Value, at.UriTemplate, instance, m);
+						var rh = new RouteHandler(name, at.UriTemplate, instance, true, m, locator, serialization);
 						Add("GET", rh);
+					}
+					foreach (var at in route)
+					{
+						var rh = new RouteHandler(name, at.Path, instance, at.IsAsync, m, locator, serialization);
+						Add(at.Method, rh);
 					}
 				}
 			}
@@ -80,35 +113,40 @@ namespace Revenj.Http
 				list.Add(handler);
 		}
 
-		struct ReqId : IEquatable<ReqId>
+		internal RouteMatch? Find(string httpMethod, char[] buffer, int len, out RouteHandler handler)
 		{
-			private readonly int HashCode;
-			private readonly string Http;
-			private readonly string Path;
-			public ReqId(string http, string path)
+			var reqHash = StringCache.CalcHash(httpMethod, buffer, len);
+			int askSign = -1;
+			for (int i = 0; i < len; i++)
 			{
-				this.HashCode = http.GetHashCode() + path.GetHashCode();
-				this.Http = http;
-				this.Path = path;
+				if (buffer[i] == '?')
+				{
+					askSign = i;
+					break;
+				}
 			}
-			public override int GetHashCode() { return HashCode; }
-			public override bool Equals(object obj) { return Equals((ReqId)obj); }
-			public bool Equals(ReqId other)
+			if (askSign == -1 && Cache.TryGetValue(reqHash, out handler))
 			{
-				return this.Http == other.Http && this.Path == other.Path;
+				if (handler.Pattern.IsStatic)
+					return handler.Pattern.ExtractMatch(handler.Url, 0);
 			}
+			var rawUrl = new string(buffer, 0, len);
+			return FindRoute(httpMethod, rawUrl, reqHash, out handler);
 		}
 
-		public RouteHandler Find(string httpMethod, string rawUrl, string absolutePath, out RouteMatch routeMatch)
+		public RouteMatch? Find(string httpMethod, string rawUrl, string absolutePath, out RouteHandler handler)
 		{
-			var reqId = new ReqId(httpMethod, absolutePath);
-			RouteHandler handler;
-			if (Cache.TryGetValue(reqId, out handler))
+			var reqHash = StringCache.CalcHash(httpMethod, absolutePath);
+			if (Cache.TryGetValue(reqHash, out handler))
 			{
-				routeMatch = handler.Pattern.ExtractMatch(rawUrl, handler.Service.Length);
-				return handler;
+				return handler.Pattern.ExtractMatch(rawUrl, handler.Service.Length);
 			}
-			routeMatch = null;
+			return FindRoute(httpMethod, rawUrl, reqHash, out handler);
+		}
+
+		private RouteMatch? FindRoute(string httpMethod, string rawUrl, int reqHash, out RouteHandler handler)
+		{
+			handler = null;
 			Dictionary<string, List<RouteHandler>> handlers;
 			if (!MethodRoutes.TryGetValue(httpMethod, out handlers))
 				return null;
@@ -128,11 +166,11 @@ namespace Revenj.Http
 				var match = h.Pattern.Match(rawUrl, service.Length);
 				if (match != null)
 				{
-					routeMatch = match;
-					var newCache = new Dictionary<ReqId, RouteHandler>(Cache);
-					newCache[reqId] = h;
+					var newCache = new Dictionary<int, RouteHandler>(Cache);
+					newCache[reqHash] = h;
 					Cache = newCache;
-					return h;
+					handler = h;
+					return match;
 				}
 			}
 			return null;

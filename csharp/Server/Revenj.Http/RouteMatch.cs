@@ -4,17 +4,18 @@ using System.Web;
 
 namespace Revenj.Http
 {
-	internal class RouteMatch
+	internal struct RouteMatch
 	{
 		internal readonly string[] OrderedArgs;
 		internal readonly KeyValuePair<string, string>[] BoundVars;
 		private readonly Dictionary<string, string> QueryParams;
-		private readonly string RawUrl;
+		internal readonly string RawUrl;
 
 		public RouteMatch(string[] orderedArgs, KeyValuePair<string, string>[] boundVars, string rawUrl)
 		{
 			this.OrderedArgs = orderedArgs;
 			this.BoundVars = boundVars;
+			this.QueryParams = null;
 			this.RawUrl = rawUrl;
 		}
 

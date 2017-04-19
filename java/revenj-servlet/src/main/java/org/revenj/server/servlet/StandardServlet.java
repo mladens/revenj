@@ -59,13 +59,14 @@ public class StandardServlet extends HttpServlet {
 								olapInfo.order,
 								olapInfo.limit,
 								olapInfo.offset);
-				Utility.executeJson(engine, req, res, AnalyzeOlapCube.class, arg);
+				Utility.execute(engine, req, res, serialization, AnalyzeOlapCube.class, arg);
 			}
 		} else {
 			res.sendError(405, "Unknown URL path: " + path);
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	@Override
 	protected void doPost(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
 		String path = req.getPathInfo();
@@ -73,9 +74,10 @@ public class StandardServlet extends HttpServlet {
 			final Optional<Class<?>> manifest = Utility.findType(model, path, "/persist/", res);
 			if (manifest.isPresent()) {
 				String name = path.substring("/persist/".length(), path.length());
-				ArrayList insert = serialization.deserialize(req.getInputStream(), "application/json", ArrayList.class, manifest.get());
-				PersistAggregateRoot.Argument<Object> arg = new PersistAggregateRoot.Argument<>(name, insert, null, null);
-				Utility.executeJson(engine, req, res, PersistAggregateRoot.class, arg);
+				Optional<ArrayList> insert = Utility.deserializeOrBadRequest(serialization, req, res, ArrayList.class, manifest.get());
+				if (insert.isPresent()) return;
+				PersistAggregateRoot.Argument<Object> arg = new PersistAggregateRoot.Argument<>(name, insert.get(), null, null);
+				Utility.execute(engine, req, res, serialization, PersistAggregateRoot.class, arg);
 			}
 		} else if (path.startsWith("/execute/")) {
 			String name = path.substring("/execute/".length(), path.length()).replace('+', '$');
@@ -85,8 +87,8 @@ public class StandardServlet extends HttpServlet {
 			ServerCommandDescription[] scd = new ServerCommandDescription[]{
 					new ServerCommandDescription<>(null, ExecuteService.class, os.toString("UTF-8"))
 			};
-			ProcessingResult<String> result = engine.execute(String.class, String.class, scd, Utility.toPrincipal(req));
-			Utility.returnJSON(res, result);
+			ProcessingResult<Object> result = engine.execute(String.class, Object.class, scd, Utility.toPrincipal(req));
+			Utility.returnResponse(req, res, serialization, result);
 		} else {
 			res.sendError(405, "Unknown URL path: " + path);
 		}
@@ -99,13 +101,14 @@ public class StandardServlet extends HttpServlet {
 			final Optional<Class<?>> manifest = Utility.findType(model, path, "/persist/", res);
 			if (manifest.isPresent()) {
 				String name = path.substring("/persist/".length(), path.length());
-				ArrayList input = serialization.deserialize(req.getInputStream(), "application/json", ArrayList.class, manifest.get());
-				ArrayList<PersistAggregateRoot.Pair> toUpdate = new ArrayList<>(input.size());
-				for (Object it : input) {
+				Optional<ArrayList> input = Utility.deserializeOrBadRequest(serialization, req, res, ArrayList.class, manifest.get());
+				if (input.isPresent()) return;
+				ArrayList<PersistAggregateRoot.Pair> toUpdate = new ArrayList<>(input.get().size());
+				for (Object it : input.get()) {
 					toUpdate.add(new PersistAggregateRoot.Pair<>(null, it));
 				}
 				PersistAggregateRoot.Argument<Object> arg = new PersistAggregateRoot.Argument<>(name, null, toUpdate, null);
-				Utility.executeJson(engine, req, res, PersistAggregateRoot.class, arg);
+				Utility.execute(engine, req, res, serialization, PersistAggregateRoot.class, arg);
 			}
 		} else if (path.startsWith("/olap/")) {
 			final Optional<Class<?>> manifest = Utility.findType(model, path, "/olap/", res);
@@ -127,7 +130,7 @@ public class StandardServlet extends HttpServlet {
 								olapInfo.order,
 								olapInfo.limit,
 								olapInfo.offset);
-				Utility.executeJson(engine, req, res, AnalyzeOlapCube.class, arg);
+				Utility.execute(engine, req, res, serialization, AnalyzeOlapCube.class, arg);
 			}
 		} else {
 			res.sendError(405, "Unknown URL path: " + path);

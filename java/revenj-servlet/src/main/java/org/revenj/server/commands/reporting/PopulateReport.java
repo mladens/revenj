@@ -1,17 +1,16 @@
 package org.revenj.server.commands.reporting;
 
-import com.dslplatform.json.CompiledJson;
 import org.revenj.patterns.*;
 import org.revenj.security.PermissionManager;
 import org.revenj.serialization.Serialization;
 import org.revenj.server.CommandResult;
-import org.revenj.server.ServerCommand;
+import org.revenj.server.ReadOnlyServerCommand;
 
 import java.io.IOException;
 import java.security.Principal;
 import java.util.Optional;
 
-public class PopulateReport implements ServerCommand {
+public class PopulateReport implements ReadOnlyServerCommand {
 
 	private final DomainModel domainModel;
 	private final PermissionManager permissions;
@@ -23,7 +22,6 @@ public class PopulateReport implements ServerCommand {
 		this.permissions = permissions;
 	}
 
-	@CompiledJson
 	public static final class Argument<TFormat> {
 		public TFormat Data;
 		public String ReportName;
@@ -38,6 +36,7 @@ public class PopulateReport implements ServerCommand {
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	@Override
 	public <TInput, TOutput> CommandResult<TOutput> execute(
 			ServiceLocator locator,

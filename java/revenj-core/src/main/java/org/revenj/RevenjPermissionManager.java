@@ -17,15 +17,15 @@ import java.util.stream.Stream;
 
 final class RevenjPermissionManager implements PermissionManager, Closeable {
 
-	private final Optional<SearchableRepository<GlobalPermission>> globalRepository;
-	private final Optional<SearchableRepository<RolePermission>> rolesRepository;
+	private final Callable<Optional<SearchableRepository<GlobalPermission>>> globalRepository;
+	private final Callable<Optional<SearchableRepository<RolePermission>>> rolesRepository;
 	private final boolean defaultPermissions;
 
 	private final Subscription globalSubscription;
 	private final Subscription roleSubscription;
 
-	private Map<String, Boolean> globalPermissions;
-	private Map<String, List<Pair>> rolePermissions;
+	private Map<String, Boolean> globalPermissions = new HashMap<>();
+	private Map<String, List<Pair>> rolePermissions = new HashMap<>();
 
 	private Map<String, Boolean> cache = new HashMap<>();
 	private final Map<Class<?>, List<Filter>> registeredFilters = new HashMap<>();
@@ -60,9 +60,9 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 				}.resolve(locator),
 				new Generic<Observable<Callable<RolePermission>>>() {
 				}.resolve(locator),
-				new Generic<Optional<SearchableRepository<GlobalPermission>>>() {
+				new Generic<Callable<Optional<SearchableRepository<GlobalPermission>>>>() {
 				}.resolve(locator),
-				new Generic<Optional<SearchableRepository<RolePermission>>>() {
+				new Generic<Callable<Optional<SearchableRepository<RolePermission>>>>() {
 				}.resolve(locator));
 	}
 
@@ -70,12 +70,12 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 			Properties properties,
 			Observable<Callable<GlobalPermission>> globalChanges,
 			Observable<Callable<RolePermission>> roleChanges,
-			Optional<SearchableRepository<GlobalPermission>> globalRepository,
-			Optional<SearchableRepository<RolePermission>> rolesRepository) {
+			Callable<Optional<SearchableRepository<GlobalPermission>>> globalRepository,
+			Callable<Optional<SearchableRepository<RolePermission>>> rolesRepository) {
 		String permissions = properties.getProperty("revenj.permissions");
 		if (permissions != null && permissions.length() > 0) {
-			if (!permissions.equalsIgnoreCase("open") || !permissions.equalsIgnoreCase("closed")) {
-				throw new RuntimeException("Invalid revenj.permission settings found: " + permissions + ".\n"
+			if (!permissions.equalsIgnoreCase("open") && !permissions.equalsIgnoreCase("closed")) {
+				throw new RuntimeException("Invalid revenj.permission settings found: '" + permissions + "'.\n"
 						+ "Allowed values are open and closed");
 			}
 		}
@@ -87,16 +87,26 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 	}
 
 	private void checkPermissions() {
-		if (!permissionsChanged)
+		if (!permissionsChanged) {
 			return;
-		if (globalRepository.isPresent()) {
+		}
+		Optional<SearchableRepository<GlobalPermission>> global;
+		Optional<SearchableRepository<RolePermission>> roles;
+		try {
+			global = globalRepository.call();
+			roles = rolesRepository.call();
+		} catch (Exception ignore) {
+			global = Optional.empty();
+			roles = Optional.empty();
+		}
+		if (global.isPresent()) {
 			globalPermissions =
-					globalRepository.get().search().stream().collect(
+					global.get().search().stream().collect(
 							Collectors.toMap(GlobalPermission::getName, GlobalPermission::getIsAllowed));
 		}
-		if (rolesRepository.isPresent()) {
+		if (roles.isPresent()) {
 			rolePermissions =
-					rolesRepository.get().search().stream().collect(
+					roles.get().search().stream().collect(
 							Collectors.groupingBy(
 									RolePermission::getName,
 									Collectors.mapping(it -> new Pair(it.getRoleID(), it.getIsAllowed()), Collectors.toList())));
@@ -106,7 +116,7 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 	}
 
 	private boolean checkOpen(String[] parts, int len) {
-		if (len < 1) {
+		if (len < 0) {
 			return defaultPermissions;
 		}
 		String name = String.join(".", Arrays.copyOf(parts, len));
@@ -122,25 +132,26 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 
 	@Override
 	public boolean canAccess(String identifier, Principal user) {
-		if (user == null) return defaultPermissions;
 		checkPermissions();
 		String target = identifier != null ? identifier : "";
-		String id = user.getName() + ":" + target;
+		String id = user != null ? user.getName() + ":" + target : target;
 		Boolean exists = cache.get(id);
 		if (exists != null) {
 			return exists;
 		}
-		String[] parts = target.split(".");
+		String[] parts = target.split("\\.");
 		boolean isAllowed = checkOpen(parts, parts.length);
-		List<Pair> permissions;
-		for (int i = parts.length; i > 0; i--) {
-			String subName = String.join(".", Arrays.copyOf(parts, i));
-			permissions = rolePermissions.get(subName);
-			if (permissions != null) {
-				Optional<Pair> found = permissions.stream().filter(it -> implies(user, it.name)).findFirst();
-				if (found.isPresent()) {
-					isAllowed = found.get().isAllowed;
-					break;
+		if (user != null) {
+			List<Pair> permissions;
+			for (int i = parts.length; i >= 0; i--) {
+				String subName = String.join(".", Arrays.copyOf(parts, i));
+				permissions = rolePermissions.get(subName);
+				if (permissions != null) {
+					Optional<Pair> found = permissions.stream().filter(it -> implies(user, it.name)).findFirst();
+					if (found.isPresent()) {
+						isAllowed = found.get().isAllowed;
+						break;
+					}
 				}
 			}
 		}
@@ -151,7 +162,7 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 	}
 
 	@Override
-	public <T extends DataSource, S extends T> Query<S> applyFilters(Class<T> manifest, Principal user, Query<S> data) {
+	public <T, S extends T> Query<S> applyFilters(Class<T> manifest, Principal user, Query<S> data) {
 		if (user == null) return data.filter(it -> defaultPermissions);
 		List<Filter> registered = registeredFilters.get(manifest);
 		if (registered != null) {
@@ -167,7 +178,7 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 	}
 
 	@Override
-	public <T extends DataSource, S extends T> List<S> applyFilters(Class<T> manifest, Principal user, List<S> data) {
+	public <T, S extends T> List<S> applyFilters(Class<T> manifest, Principal user, List<S> data) {
 		if (user == null) return defaultPermissions ? data : Collections.EMPTY_LIST;
 		List<Filter> registered = registeredFilters.get(manifest);
 		if (registered != null) {
@@ -185,7 +196,7 @@ final class RevenjPermissionManager implements PermissionManager, Closeable {
 	}
 
 	@Override
-	public <T extends DataSource> Closeable registerFilter(Class<T> manifest, Specification<T> filter, String role, boolean inverse) {
+	public <T> Closeable registerFilter(Class<T> manifest, Specification<T> filter, String role, boolean inverse) {
 		List<Filter> registered = registeredFilters.get(manifest);
 		if (registered == null) {
 			registered = new ArrayList<>();

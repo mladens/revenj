@@ -60,7 +60,10 @@ public class CrudServlet extends HttpServlet {
 
 	@Override
 	protected void doGet(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
-		check(req, res, Read.Argument::new).ifPresent(arg -> Utility.executeJson(engine, req, res, Read.class, arg));
+		Optional<Read.Argument> arg = check(req, res, Read.Argument::new);
+		if (arg.isPresent()) {
+			Utility.execute(engine, req, res, serialization, Read.class, arg.get());
+		}
 	}
 
 	@Override
@@ -76,8 +79,9 @@ public class CrudServlet extends HttpServlet {
 			res.sendError(400, "Unknown domain object: " + name);
 			return;
 		}
-		Object instance = serialization.deserialize(manifest.get(), req.getInputStream(), req.getContentType());
-		Utility.executeJson(engine, req, res, Create.class, new Create.Argument<>(name, instance));
+		Optional<?> instance = Utility.deserializeOrBadRequest(serialization, manifest.get(), req, res);
+		if (!instance.isPresent()) return;
+		Utility.execute(engine, req, res, serialization, Create.class, new Create.Argument<>(name, instance.get(), Utility.returnInstance(req)));
 	}
 
 	@Override
@@ -98,12 +102,16 @@ public class CrudServlet extends HttpServlet {
 			res.sendError(400, "Uri parameter not set. Expecting /module.name?uri=value");
 			return;
 		}
-		Object instance = serialization.deserialize(manifest.get(), req.getInputStream(), req.getContentType());
-		Utility.executeJson(engine, req, res, Update.class, new Update.Argument<>(name, uri, instance));
+		Optional<?> instance = Utility.deserializeOrBadRequest(serialization, manifest.get(), req, res);
+		if (!instance.isPresent()) return;
+		Utility.execute(engine, req, res, serialization, Update.class, new Update.Argument<>(name, uri, instance.get(), Utility.returnInstance(req)));
 	}
 
 	@Override
 	protected void doDelete(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
-		check(req, res, Delete.Argument::new).ifPresent(arg -> Utility.executeJson(engine, req, res, Delete.class, arg));
+		Optional<Delete.Argument> arg = check(req, res, Delete.Argument::new);
+		if (arg.isPresent()) {
+			Utility.execute(engine, req, res, serialization, Delete.class, arg.get());
+		}
 	}
 }

@@ -1,12 +1,6 @@
-.cache
 .idea
-.classpath
-.project
-.settings
-.worksheet
+
 target
 
-*.pyc
-*.log
-
-~$*
+out/
+*.iml

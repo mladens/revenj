@@ -209,6 +209,13 @@ final class SimpleContainer implements Container {
 				}
 			}
 		}
+		if (constructors.length == 0) {
+			try {
+				Object instance = manifest.newInstance();
+				return Either.success(instance);
+			} catch (Exception ignore) {
+			}
+		}
 		return error == null
 				? Either.fail("Unable to find constructors for: " + manifest)
 				: Either.fail(error);
@@ -350,7 +357,7 @@ final class SimpleContainer implements Container {
 			if (basicType != null) {
 				registration = getRegistration(basicType);
 				if (registration != null) {
-					resolveRegistration(registration, caller);
+					return resolveRegistration(registration, caller);
 				}
 			}
 			if (type instanceof ParameterizedType) {

@@ -1,11 +1,11 @@
 package org.revenj;
 
 import org.revenj.patterns.*;
-import org.revenj.postgres.*;
-import org.revenj.postgres.converters.ArrayTuple;
-import org.revenj.postgres.jinq.RevenjQueryComposer;
-import org.revenj.postgres.jinq.jpqlquery.GeneratedQueryParameter;
-import org.revenj.postgres.jinq.transform.LambdaInfo;
+import org.revenj.database.postgres.*;
+import org.revenj.database.postgres.converters.ArrayTuple;
+import org.revenj.database.postgres.jinq.RevenjQueryComposer;
+import org.revenj.database.postgres.jinq.jpqlquery.GeneratedQueryParameter;
+import org.revenj.database.postgres.jinq.transform.LambdaInfo;
 
 import java.io.IOException;
 import java.sql.*;
@@ -13,7 +13,6 @@ import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
 class PostgresBulkReader implements RepositoryBulkReader, BulkReaderQuery, AutoCloseable {
 
@@ -107,7 +106,7 @@ class PostgresBulkReader implements RepositoryBulkReader, BulkReaderQuery, AutoC
 	}
 
 	@SuppressWarnings("unchecked")
-	private <T> BulkRepository<T> getRepository(Class<T> manifest) {
+	private BulkRepository getRepository(Class<?> manifest) {
 		BulkRepository repository = repositories.get(manifest);
 		if (repository == null) {
 			try {
@@ -176,7 +175,7 @@ class PostgresBulkReader implements RepositoryBulkReader, BulkReaderQuery, AutoC
 		}
 		List<GeneratedQueryParameter> parameters = filter != null ? new ArrayList<>() : null;
 		List<LambdaInfo> lambdas = filter != null ? new ArrayList<>(1) : null;
-		cube.prepareSql(builder, dimensions, facts, order, filter, limit, offset, parameters, lambdas);
+		cube.prepareSql(builder, true, dimensions, facts, order, filter, limit, offset, parameters, lambdas);
 		PostgresOlapCubeQuery.Converter[] converters = cube.prepareConverters(dimensions, facts);
 		String[] columnNames = new String[dimensionsAndFacts.size()];
 		for (int x = 0; x < dimensions.size(); x++) {
@@ -210,7 +209,7 @@ class PostgresBulkReader implements RepositoryBulkReader, BulkReaderQuery, AutoC
 					Map<String, Object> map = new LinkedHashMap<>();
 					rdr.read(3);
 					for (int x = 0; x < converters.length; x++) {
-						map.put(columnNames[x], converters[x].convert(rdr));
+						map.put(columnNames[x], converters[x].convert(rdr, 1));
 					}
 					rdr.read(3);
 					result.add(map);

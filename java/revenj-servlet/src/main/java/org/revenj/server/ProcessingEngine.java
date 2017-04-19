@@ -34,7 +34,7 @@ public final class ProcessingEngine {
 				extensibility.isPresent() ? extensibility.get().resolve(container, ServerCommand.class) : new ServerCommand[0]);
 	}
 
-	public ProcessingEngine(
+	ProcessingEngine(
 			Container container,
 			DataSource dataSource,
 			WireSerialization serialization,
@@ -78,14 +78,26 @@ public final class ProcessingEngine {
 			throw new RuntimeException("Invalid serialization format: " + output);
 		});
 
-		for (ServerCommandDescription<TInput> cd : commandDescriptions) {
-			if (!permissions.canAccess(cd.commandClass, principal)) {
-				return new ProcessingResult<>(
-						"You don't have permission to execute command: " + cd.commandClass,
-						403,
-						Collections.EMPTY_LIST,
-						startProcessing);
+		boolean withTransaction = false;
+		try {
+			for (ServerCommandDescription<TInput> cd : commandDescriptions) {
+				if (!permissions.canAccess(cd.commandClass, principal)) {
+					return new ProcessingResult<>(
+							"You don't have permission to execute command: " + cd.commandClass,
+							403,
+							Collections.EMPTY_LIST,
+							startProcessing);
+				}
+				if (!ReadOnlyServerCommand.class.isAssignableFrom(cd.commandClass)) {
+					withTransaction = true;
+				}
 			}
+		} catch (SecurityException se) {
+			return new ProcessingResult<>(
+					se.getMessage(),
+					403,
+					Collections.EMPTY_LIST,
+					startProcessing);
 		}
 		ArrayList<CommandResultDescription<TOutput>> executedCommands = new ArrayList<>(commandDescriptions.length);
 		Connection connection;
@@ -98,7 +110,7 @@ public final class ProcessingEngine {
 			try {
 				try (Container scope = container.createScope()) {
 					scope.registerInstance(Connection.class, connection, false);
-					connection.setAutoCommit(false);
+					connection.setAutoCommit(!withTransaction);
 					for (ServerCommandDescription<TInput> cd : commandDescriptions) {
 						long startCommand = System.nanoTime();
 						ServerCommand command = serverCommands.get(cd.commandClass);
@@ -111,27 +123,39 @@ public final class ProcessingEngine {
 						}
 						executedCommands.add(CommandResultDescription.create(cd.requestID, result, startCommand));
 						if (result.status >= 400) {
-							connection.rollback();
+							if (withTransaction) {
+								connection.rollback();
+							}
 							return new ProcessingResult<>(result.message, result.status, null, startProcessing);
 						}
 					}
-					connection.commit();
+					if (withTransaction) {
+						connection.commit();
+					}
 					return ProcessingResult.success(executedCommands, startProcessing);
 				}
 			} catch (IOException e) {
-				connection.rollback();
+				if (withTransaction) {
+					connection.rollback();
+				}
 				if (e.getCause() instanceof SQLException) {
 					return new ProcessingResult<>(e.getCause().getMessage(), 409, null, startProcessing);
 				}
 				return new ProcessingResult<>(e.getMessage(), 500, null, startProcessing);
 			} catch (SecurityException e) {
-				connection.rollback();
+				if (withTransaction) {
+					connection.rollback();
+				}
 				return new ProcessingResult<>(e.getMessage(), 403, null, startProcessing);
 			} catch (Exception e) {
-				connection.rollback();
+				if (withTransaction) {
+					connection.rollback();
+				}
 				return ProcessingResult.error(e, startProcessing);
 			} finally {
-				connection.setAutoCommit(true);
+				if (withTransaction) {
+					connection.setAutoCommit(true);
+				}
 				connection.close();
 			}
 		} catch (SQLException ex) {

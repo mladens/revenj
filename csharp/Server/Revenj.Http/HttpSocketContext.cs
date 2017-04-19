@@ -37,7 +37,7 @@ namespace Revenj.Http
 		private static readonly byte CR = 13;
 		private static readonly byte LF = 10;
 
-		private static readonly char[] Lower = new char[255];
+		private static readonly char[] Lower = new char[256];
 
 		static HttpSocketContext()
 		{
@@ -105,7 +105,8 @@ namespace Revenj.Http
 			response[405] = ASCII.GetBytes(method + " 505 HTTP Version Not Supported\r\n");
 		}
 
-		public readonly ChunkedMemoryStream Stream;
+		public readonly ChunkedMemoryStream InputStream;
+		public readonly ChunkedMemoryStream OutputStream;
 		private readonly byte[] InputTemp = new byte[8192];
 		private readonly byte[] OutputTemp = new byte[8192];
 		private readonly char[] TmpCharBuf = new char[8192];
@@ -116,12 +117,15 @@ namespace Revenj.Http
 		public readonly int Limit;
 
 		private readonly string Prefix;
+		private readonly Routes Routes;
 
-		public HttpSocketContext(string prefix, int limit)
+		public HttpSocketContext(string prefix, int limit, Routes routes)
 		{
 			this.Prefix = prefix;
 			this.Limit = limit;
-			Stream = ChunkedMemoryStream.Static();
+			this.Routes = routes;
+			InputStream = ChunkedMemoryStream.Static();
+			OutputStream = ChunkedMemoryStream.Static();
 		}
 
 		private int ReadUntil(Socket socket, byte match, int position)
@@ -138,18 +142,24 @@ namespace Revenj.Http
 					}
 				}
 				position = totalBytes;
-				var size = socket.Receive(InputTemp, totalBytes, InputTemp.Length - totalBytes, SocketFlags.None);
-				retries++;
-				if (size == 0) return -1;
-				totalBytes += size;
-			} while (retries < 100 && totalBytes < InputTemp.Length);
+				SocketError errorCode;
+				var size = socket.Receive(InputTemp, totalBytes, InputTemp.Length - totalBytes, SocketFlags.None, out errorCode);
+				if (errorCode == SocketError.Success && size > 0)
+					totalBytes += size;
+				else
+				{
+					if (retries == 0
+						|| errorCode == SocketError.ConnectionReset
+						|| errorCode == SocketError.ConnectionAborted) return -1;
+					retries++;
+				}
+			} while (retries < 20 && totalBytes < InputTemp.Length);
 			return -1;
 		}
 
 		public string HttpMethod;
 		public string RawUrl;
 		public string HttpProtocolVersion;
-		public string AbsolutePath;
 
 		struct HeaderPair
 		{
@@ -241,26 +251,61 @@ namespace Revenj.Http
 			totalBytes = 0;
 		}
 
-		public bool Parse(Socket socket)
+		private static readonly StringCache KeyCache = new StringCache(10);
+		private readonly StringCache ValueCache = new StringCache(12);
+
+		public bool Parse(Socket socket, out RouteMatch? match, out RouteHandler route)
 		{
 			positionInTmp = 0;
 			Pipeline = false;
 			var methodEnd = ReadUntil(socket, Space, 0);
-			if (methodEnd == -1) return ReturnError(socket, 505);
+			if (methodEnd == -1)
+			{
+				match = null;
+				route = null;
+				if (!socket.Connected)
+				{
+					offsetInOutput = 0;
+					return false;
+				}
+				else if (positionInTmp == 0)
+				{
+					if (offsetInOutput != 0)
+					{
+						socket.Send(OutputTemp, offsetInOutput, SocketFlags.None);
+						offsetInOutput = 0;
+						socket.Close();
+						return false;
+					}
+					else return ReturnError(socket, 408);
+				}
+				else return ReturnError(socket, 505);
+			}
 			HttpMethod = ReadMethod(methodEnd, InputTemp);
 			var rowEnd = ReadUntil(socket, LF, methodEnd + 1);
-			if (rowEnd == -1 || rowEnd < 12) return ReturnError(socket, 505);
+			if (rowEnd == -1 || rowEnd < 12)
+			{
+				match = null;
+				route = null;
+				return ReturnError(socket, 505);
+			}
 			RequestHeadersLength = 0;
 			ResponseHeadersLength = 0;
 			HttpProtocolVersion = ReadProtocol(rowEnd - 2);
 			if (HttpProtocolVersion == null)
 			{
+				match = null;
+				route = null;
 				ReturnError(socket, 505, "Only HTTP/1.1 and HTTP/1.0 supported (partially)", false);
 				return false;
 			}
-			ReadUrl(rowEnd);
-			int askSign = RawUrl.IndexOf('?');
-			AbsolutePath = askSign == -1 ? RawUrl : RawUrl.Substring(0, askSign);
+			match = ReadUrl(rowEnd, out route);
+			if (route == null)
+			{
+				var unknownRoute = "Unknown route " + RawUrl + " on method " + HttpMethod;
+				ReturnError(socket, 404, unknownRoute, false);
+				return false;
+			}
 			ResponseStatus = HttpStatusCode.OK;
 			ResponseLength = null;
 			ResponseContentType = null;
@@ -283,11 +328,11 @@ namespace Revenj.Http
 					var nameBuf = TmpCharBuf;
 					for (int x = start; x < i; x++)
 						nameBuf[x - start] = Lower[InputTemp[x]];
-					string name = new string(nameBuf, 0, i - start);
+					var name = KeyCache.Get(nameBuf, i - start);
 					if (InputTemp[i + 1] == 32) i++;
 					for (int x = i + 1; x < rowEnd; x++)
 						nameBuf[x - i - 1] = (char)InputTemp[x];
-					string value = new string(nameBuf, 0, rowEnd - i - 1);
+					var value = ValueCache.Get(nameBuf, rowEnd - i - 1);
 					if (RequestHeadersLength == RequestHeaders.Length)
 					{
 						var newHeaders = new HeaderPair[RequestHeaders.Length * 2];
@@ -309,18 +354,21 @@ namespace Revenj.Http
 					if (len > Limit) return ReturnError(socket, 413);
 				}
 				else return ReturnError(socket, 411);
-				Stream.Reset();
+				InputStream.Reset();
 				var size = totalBytes - rowEnd;
-				Stream.Write(InputTemp, rowEnd, size);
+				InputStream.Write(InputTemp, rowEnd, size);
 				len -= size;
+				var oldTimeout = socket.ReceiveTimeout;
+				socket.ReceiveTimeout = 10000;
 				while (len > 0)
 				{
 					size = socket.Receive(InputTemp, Math.Min(len, InputTemp.Length), SocketFlags.None);
 					if (size < 1) return ReturnError(socket, 408);
-					Stream.Write(InputTemp, 0, size);
+					InputStream.Write(InputTemp, 0, size);
 					len -= size;
 				}
-				Stream.Position = 0;
+				socket.ReceiveTimeout = oldTimeout;
+				InputStream.Position = 0;
 				rowEnd = totalBytes;
 				totalBytes = 0;
 			}
@@ -340,7 +388,7 @@ namespace Revenj.Http
 			return true;
 		}
 
-		private void ReadUrl(int rowEnd)
+		private RouteMatch? ReadUrl(int rowEnd, out RouteHandler handler)
 		{
 			var httpLen1 = HttpMethod.Length + 1;
 			var charBuf = TmpCharBuf;
@@ -351,11 +399,18 @@ namespace Revenj.Http
 				if (tb > 250)
 				{
 					RawUrl = UTF8.GetString(InputTemp, httpLen1, end - httpLen1);
-					return;
+					var askSign = RawUrl.IndexOf('?');
+					var absolutePath = askSign == -1 ? RawUrl : RawUrl.Substring(0, askSign);
+					return Routes.Find(HttpMethod, RawUrl, absolutePath, out handler);
 				}
 				charBuf[x - httpLen1] = (char)tb;
 			}
-			RawUrl = new string(charBuf, 0, end - httpLen1);
+			var match = Routes.Find(HttpMethod, charBuf, end - httpLen1, out handler);
+			if (match == null)
+				RawUrl = new string(charBuf, 0, end - httpLen1);
+			else
+				RawUrl = match.Value.RawUrl;
+			return match;
 		}
 
 		private RouteMatch Route;
@@ -367,12 +422,15 @@ namespace Revenj.Http
 			this.Principal = principal;
 		}
 
-		internal bool Return(Stream stream, Socket socket)
+		private int offsetInOutput;
+
+		internal bool Return(Stream stream, Socket socket, bool forceFlush)
 		{
+			var offset = offsetInOutput;
 			int responseCode = (int)ResponseStatus;
 			var http = HttpResponse[responseCode - 100];
-			Buffer.BlockCopy(http, 0, OutputTemp, 0, http.Length);
-			var offset = http.Length;
+			Buffer.BlockCopy(http, 0, OutputTemp, offset, http.Length);
+			offset += http.Length;
 			if (ResponseIsJson)
 			{
 				Buffer.BlockCopy(JsonContentType, 0, OutputTemp, offset, JsonContentType.Length);
@@ -428,11 +486,27 @@ namespace Revenj.Http
 			}
 			offset = AddServerAndDate(offset);
 			var cms = stream as ChunkedMemoryStream;
+			var mustFlushResponse = forceFlush || !keepAlive || !Pipeline;
 			if (cms != null)
 			{
 				offset = AddContentLength(cms.Length, offset);
-				socket.Send(OutputTemp, offset, SocketFlags.Partial);
-				cms.Send(socket);
+				var len = offset + cms.Length;
+				if (len < 4096)
+				{
+					cms.CopyTo(OutputTemp, offset);
+					if (mustFlushResponse || len > 1024)
+					{
+						offsetInOutput = 0;
+						socket.Send(OutputTemp, (int)len, SocketFlags.None);
+					}
+					else offsetInOutput = (int)len;
+				}
+				else
+				{
+					socket.Send(OutputTemp, offset, SocketFlags.Partial);
+					cms.Send(socket);
+					offsetInOutput = 0;
+				}
 				cms.Dispose();
 			}
 			else if (stream != null)
@@ -455,7 +529,13 @@ namespace Revenj.Http
 						{
 							pos += stream.Read(OutputTemp, pos + offset, size - pos);
 						} while (pos < len);
-						socket.Send(OutputTemp, size + offset, SocketFlags.None);
+						offset += size;
+						if (mustFlushResponse)
+						{
+							socket.Send(OutputTemp, offset, SocketFlags.None);
+							offsetInOutput = 0;
+						}
+						else offsetInOutput = offset;
 					}
 					else
 					{
@@ -467,6 +547,7 @@ namespace Revenj.Http
 							pos = stream.Read(OutputTemp, 0, OutputTemp.Length);
 							socket.Send(OutputTemp, pos, SocketFlags.None);
 						} while (pos != 0);
+						offsetInOutput = 0;
 					}
 				}
 				finally
@@ -477,7 +558,13 @@ namespace Revenj.Http
 			else
 			{
 				Buffer.BlockCopy(ZeroContentLength, 0, OutputTemp, offset, ZeroContentLength.Length);
-				socket.Send(OutputTemp, offset + ZeroContentLength.Length, SocketFlags.None);
+				offset += ZeroContentLength.Length;
+				if (mustFlushResponse)
+				{
+					socket.Send(OutputTemp, offset, SocketFlags.None);
+					offsetInOutput = 0;
+				}
+				else offsetInOutput = offset;
 			}
 			return keepAlive;
 		}
@@ -491,10 +578,15 @@ namespace Revenj.Http
 		internal void ReturnError(Socket socket, int status, string message, bool withHeaders)
 		{
 			if (!socket.Connected)
+			{
+				offsetInOutput = 0;
 				return;
+			}
 			var http = HttpResponse[status - 100];
-			Buffer.BlockCopy(http, 0, OutputTemp, 0, http.Length);
-			var offset = http.Length;
+			var offset = offsetInOutput;
+			Buffer.BlockCopy(http, 0, OutputTemp, offset, http.Length);
+			offset += http.Length;
+			offsetInOutput = 0;
 			Buffer.BlockCopy(ConnectionClose, 0, OutputTemp, offset, ConnectionClose.Length);
 			offset += ConnectionClose.Length;
 			offset = AddServerAndDate(offset);
@@ -680,7 +772,7 @@ namespace Revenj.Http
 			set { TemplateMatch = value; }
 		}
 
-		string IRequestContext.GetHeader(string name)
+		string IRequestContext.GetHeaderLowercase(string name)
 		{
 			return GetRequestHeader(name);
 		}
@@ -724,6 +816,37 @@ namespace Revenj.Http
 		{
 			get { return ResponseStatus; }
 			set { ResponseStatus = value; }
+		}
+
+		public void CopyFrom(HttpSocketContext other)
+		{
+			RequestHeadersLength = other.RequestHeadersLength;
+			ResponseHeadersLength = 0;
+			if (RequestHeaders.Length < RequestHeadersLength)
+			{
+				var newHeaders = new HeaderPair[other.RequestHeaders.Length];
+				Array.Copy(other.RequestHeaders, newHeaders, RequestHeadersLength);
+				RequestHeaders = newHeaders;
+			}
+			else Array.Copy(other.RequestHeaders, RequestHeaders, RequestHeadersLength);
+			RawUrl = other.RawUrl;
+			positionInTmp = other.positionInTmp;
+			Pipeline = other.Pipeline;
+			IsHttp10 = other.IsHttp10;
+			totalBytes = other.totalBytes;
+			Buffer.BlockCopy(other.InputTemp, 0, InputTemp, 0, positionInTmp);
+			other.InputStream.CopyTo(InputStream);
+			InputStream.Position = other.InputStream.Position;
+			InputStream.SetLength(other.InputStream.Length);
+			HttpMethod = other.HttpMethod;
+			HttpProtocolVersion = other.HttpProtocolVersion;
+			TemplateMatch = other.TemplateMatch;
+			ResponseStatus = HttpStatusCode.OK;
+			ResponseLength = null;
+			ResponseContentType = null;
+			ResponseIsJson = false;
+			ContentTypeResponseIndex = -1;
+			offsetInOutput = 0;
 		}
 	}
 }
